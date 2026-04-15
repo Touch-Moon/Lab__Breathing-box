@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Wave Slabs — frosted acrylic row</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #eeeeee; overflow: hidden; }
+  canvas { display: block; }
+  .hint {
+    position: fixed; left: 16px; bottom: 14px; z-index: 10;
+    font: 12px/1.4 ui-monospace, Menlo, monospace; color: #666;
+    letter-spacing: 0.02em;
+  }
+  .lil-gui.root {
+    --background-color: rgba(20,20,22,0.92); --text-color: #eee;
+    --title-background-color: #111; --title-text-color: #fff;
+    --widget-color: #2a2a2e; --hover-color: #3a3a40;
+    --focus-color: #4a4a50; --number-color: #aabfff;
+    --string-color: #f2b17a;
+    font-family: ui-monospace, Menlo, monospace;
+  }
+  .lil-gui.autoPlace { top: 56px; right: 16px; bottom: auto; }
+  .lil-gui.autoPlace.hidden { display: none; }
+  .gui-toggle {
+    position: fixed; top: 16px; right: 16px; z-index: 20;
+    padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(20,20,22,0.92); color: #eee;
+    font: 12px/1 ui-monospace, Menlo, monospace; letter-spacing: 0.04em;
+    cursor: pointer; user-select: none;
+    transition: background 0.15s ease, transform 0.15s ease;
+  }
+  .gui-toggle:hover  { background: rgba(40,40,44,0.95); }
+  .gui-toggle:active { transform: scale(0.97); }
+  .gui-toggle .dot {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: #7cf0a8; margin-right: 8px; vertical-align: middle;
+  }
+  .gui-toggle.is-off .dot { background: #666; }
+</style>
+</head>
+<body>
+<div class="hint">wave slabs · frosted acrylic + travelling sine · drag to orbit</div>
+<button id="gui-toggle" class="gui-toggle" aria-pressed="true" title="Toggle controls (press H)">
+  <span class="dot"></span><span class="label">Controls</span>
+</button>
+
+<script type="importmap">
+{
+  "imports": {
+    "three":       "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/",
+    "lil-gui":     "https://unpkg.com/lil-gui@0.19.2/dist/lil-gui.esm.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls }      from 'three/addons/controls/OrbitControls.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { EffectComposer }     from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass }         from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass }    from 'three/addons/postprocessing/UnrealBloomPass.js';
+import GUI from 'lil-gui';
+
+// ── 1. Params (must be first — everything references this) ──────────
+const params = {
+  count:          11,
+  slabWidth:      0.38,
+  slabDepth:      1.35,
+  gap:            0.035,
+  baseHeight:     0.24,
+  amplitude:      0.48,
+  frequency:      0.71,
+  phaseStep:      0.48,
+  colorBase:      '#d6e0f5',
+  colorAccent:    '#0122a7',
+  opacity:        0.98,
+  transmission:   0.85,
+  roughness:      0.40,
+  ambient:        0.18,
+  keyLight:       1.2,
+  fillLight:      0.15,
+  bloom:          0.11,
+  rotateSway:     0.08,
+  shadowEnabled:  true,
+  shadowSoftness: 4,
+  shadowBlur:     8,
+  shadowBias:     -0.0005,
+  shadowOpacity:  0.35,
+  floorRoughness:  0.55,
+  floorReflection: 0.35,
+  envIntensity:    0.6,
+};
+
+// ── 2. Scene / Renderer ─────────────────────────────────────────────
+const scene = new THREE.Scene();
+
+const bgGeo = new THREE.PlaneGeometry(2, 2);
+const bgMat = new THREE.ShaderMaterial({
+  depthTest: false, depthWrite: false,
+  vertexShader:   `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,1.0,1.0); }`,
+  fragmentShader: `
+    varying vec2 vUv;
+    void main(){
+      vec3 top=vec3(0.96,0.96,0.97), bot=vec3(0.86,0.87,0.89);
+      gl_FragColor=vec4(mix(bot,top,smoothstep(0.0,1.0,vUv.y)),1.0);
+    }`,
+});
+const bgScene = new THREE.Scene();
+bgScene.add(new THREE.Mesh(bgGeo, bgMat));
+
+const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(3.6, 2.4, 6.2);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.autoClear = false;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.VSMShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.15, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+// ── 3. Environment ──────────────────────────────────────────────────
+const pmrem = new THREE.PMREMGenerator(renderer);
+const envScene = new THREE.Scene();
+envScene.add(new THREE.Mesh(
+  new THREE.SphereGeometry(50, 32, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    vertexShader: `varying vec3 vPos; void main(){ vPos=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: `
+      varying vec3 vPos;
+      void main(){
+        float y=normalize(vPos).y*.5+.5;
+        vec3 top=vec3(1.0), mid=vec3(.88,.92,1.0), bot=vec3(.78,.80,.86);
+        gl_FragColor=vec4(mix(bot,mix(mid,top,smoothstep(.5,1.,y)),smoothstep(0.,.6,y)),1.0);
+      }`,
+  })
+));
+scene.environment = pmrem.fromScene(envScene, 0.04).texture;
+scene.environmentIntensity = params.envIntensity;
+
+// ── 4. Lights ───────────────────────────────────────────────────────
+const ambientLight = new THREE.AmbientLight(0xffffff, params.ambient);
+scene.add(ambientLight);
+
+const key = new THREE.DirectionalLight(0xffffff, params.keyLight);
+key.position.set(-2, 7, -3);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.near   =  0.5;
+key.shadow.camera.far    = 30;
+key.shadow.camera.left   = -8;
+key.shadow.camera.right  =  8;
+key.shadow.camera.top    =  8;
+key.shadow.camera.bottom = -8;
+key.shadow.bias        = params.shadowBias;
+key.shadow.radius      = params.shadowSoftness;
+key.shadow.blurSamples = params.shadowBlur;
+scene.add(key);
+
+const fill = new THREE.DirectionalLight(0xbad6ff, params.fillLight);
+fill.position.set(4, 2, 5);
+scene.add(fill);
+
+// ── 5. Wave Slabs ───────────────────────────────────────────────────
+const COLOR_WHITE = new THREE.Color(params.colorBase);
+const COLOR_BLUE  = new THREE.Color(params.colorAccent);
+
+const group = new THREE.Group();
+scene.add(group);
+
+let slabs = [];
+let slabGeometry = null;
+
+function buildSlabs() {
+  for (const s of slabs) { s.material.dispose(); group.remove(s.mesh); }
+  slabs = [];
+  if (slabGeometry) slabGeometry.dispose();
+  slabGeometry = new RoundedBoxGeometry(params.slabWidth, 1.0, params.slabDepth, 4, 0.02);
+  COLOR_WHITE.set(params.colorBase);
+  COLOR_BLUE.set(params.colorAccent);
+
+  for (let i = 0; i < params.count; i++) {
+    const t = Math.abs(i - (params.count - 1) / 2) / ((params.count - 1) / 2 || 1);
+    const baseColor = COLOR_WHITE.clone().lerp(COLOR_BLUE, 1.0 - Math.pow(t, 1.6));
+    const material = new THREE.MeshPhysicalMaterial({
+      color: baseColor,
+      metalness: 0,
+      roughness: params.roughness,
+      transmission: params.transmission,
+      thickness: 0.6,
+      ior: 1.45,
+      clearcoat: 0.3,
+      clearcoatRoughness: 0.25,
+      attenuationColor: baseColor,
+      attenuationDistance: 1.4,
+      transparent: true,
+      opacity: params.opacity,
+    });
+    const mesh = new THREE.Mesh(slabGeometry, material);
+    mesh.position.x = (i - (params.count - 1) / 2) * (params.slabWidth + params.gap);
+    mesh.scale.y = params.baseHeight;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    // transmission 재질은 depth pass를 건너뜀 → customDepthMaterial로 그림자 강제 생성
+    mesh.customDepthMaterial = new THREE.MeshDepthMaterial({
+      depthPacking: THREE.RGBADepthPacking,
+    });
+    group.add(mesh);
+    slabs.push({ mesh, material, baseColor, index: i });
+  }
+}
+buildSlabs();
+
+function applyMaterialParams() {
+  for (const s of slabs) {
+    s.material.opacity      = params.opacity;
+    s.material.transmission = params.transmission;
+    s.material.roughness    = params.roughness;
+  }
+}
+
+// ── 6. Contact shadow + Floor ───────────────────────────────────────
+const shadowCanvas = document.createElement('canvas');
+shadowCanvas.width = 512; shadowCanvas.height = 128;
+const sctx = shadowCanvas.getContext('2d');
+const grd = sctx.createRadialGradient(256, 64, 10, 256, 64, 220);
+grd.addColorStop(0,   'rgba(0,0,0,0.45)');
+grd.addColorStop(0.5, 'rgba(0,0,0,0.18)');
+grd.addColorStop(1,   'rgba(0,0,0,0)');
+sctx.fillStyle = grd;
+sctx.fillRect(0, 0, 512, 128);
+const shadowTex = new THREE.CanvasTexture(shadowCanvas);
+const contactShadowMat = new THREE.MeshBasicMaterial({
+  map: shadowTex, transparent: true, depthWrite: false, opacity: params.shadowOpacity,
+});
+const contactShadow = new THREE.Mesh(new THREE.PlaneGeometry(5.5, 1.6), contactShadowMat);
+contactShadow.rotation.x = -Math.PI / 2;
+contactShadow.position.y = 0.001;
+scene.add(contactShadow);
+
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(40, 40),
+  new THREE.MeshStandardMaterial({
+    color: 0xfafafa,
+    roughness: params.floorRoughness,
+    metalness: 0,
+    envMapIntensity: params.floorReflection,
+  })
+);
+floor.rotation.x = -Math.PI / 2;
+floor.position.y = -0.01;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// ── 7. Post-processing ──────────────────────────────────────────────
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), params.bloom, 0.9, 0.95);
+composer.addPass(bloom);
+
+// ── 8. Resize ───────────────────────────────────────────────────────
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+
+// ── 9. GUI ──────────────────────────────────────────────────────────
+const gui = new GUI({ title: 'Wave Slabs · Controls' });
+
+const gLayout = gui.addFolder('Layout');
+gLayout.add(params, 'count',     3,    24,   1   ).onFinishChange(buildSlabs);
+gLayout.add(params, 'slabWidth', 0.1,  0.6,  0.01).onFinishChange(buildSlabs);
+gLayout.add(params, 'slabDepth', 0.3,  2.0,  0.01).onFinishChange(buildSlabs);
+gLayout.add(params, 'gap',       0,    0.2,  0.005).onFinishChange(buildSlabs);
+
+const gWave = gui.addFolder('Wave');
+gWave.add(params, 'baseHeight',  0.05, 1.0,  0.01);
+gWave.add(params, 'amplitude',   0,    2.0,  0.01);
+gWave.add(params, 'frequency',   0,    3.0,  0.01);
+gWave.add(params, 'phaseStep',   0,    2.0,  0.01);
+gWave.add(params, 'rotateSway',  0,    0.4,  0.01);
+
+const gMat = gui.addFolder('Material');
+gMat.addColor(params, 'colorBase').name('color · edges').onChange(buildSlabs);
+gMat.addColor(params, 'colorAccent').name('color · center').onChange(buildSlabs);
+gMat.add(params, 'opacity',      0.1,  1.0,  0.01).onChange(applyMaterialParams);
+gMat.add(params, 'transmission', 0,    1.0,  0.01).onChange(applyMaterialParams);
+gMat.add(params, 'roughness',    0,    1.0,  0.01).onChange(applyMaterialParams);
+
+const gLight = gui.addFolder('Light & FX');
+gLight.add(params, 'ambient',   0, 2.0, 0.01).onChange(v => { ambientLight.intensity = v; });
+gLight.add(params, 'keyLight',  0, 3.0, 0.01).onChange(v => { key.intensity = v; });
+gLight.add(params, 'fillLight', 0, 2.0, 0.01).onChange(v => { fill.intensity = v; });
+gLight.add(params, 'bloom',     0, 1.0, 0.01).onChange(v => { bloom.strength = v; });
+
+const gShadow = gui.addFolder('Shadow');
+gShadow.add(params, 'shadowEnabled').name('enabled').onChange(v => {
+  key.castShadow = v;
+  for (const s of slabs) { s.mesh.castShadow = v; s.mesh.receiveShadow = v; }
+  floor.receiveShadow = v;
+  contactShadow.visible = v;
+  renderer.shadowMap.enabled = v;
+  renderer.shadowMap.needsUpdate = true;
+});
+gShadow.add(params, 'shadowSoftness', 1,      40,    1     ).name('softness').onChange(v => { key.shadow.radius = v; });
+gShadow.add(params, 'shadowBlur',     1,      25,    1     ).name('blur'    ).onChange(v => { key.shadow.blurSamples = v; });
+gShadow.add(params, 'shadowBias',    -0.005,   0,    0.0001).name('bias'    ).onChange(v => { key.shadow.bias   = v; });
+gShadow.add(params, 'shadowOpacity',  0,       1.0,  0.01  ).name('opacity' ).onChange(v => { contactShadowMat.opacity = v; });
+
+const gFloor = gui.addFolder('Floor');
+gFloor.add(params, 'floorRoughness',  0, 1.0, 0.01).name('roughness').onChange(v => { floor.material.roughness = v; });
+gFloor.add(params, 'floorReflection', 0, 2.0, 0.01).name('reflection').onChange(v => { floor.material.envMapIntensity = v; });
+gFloor.add(params, 'envIntensity',    0, 2.0, 0.01).name('env intensity').onChange(v => { scene.environmentIntensity = v; });
+
+gLayout.close(); gMat.close(); gLight.close(); gShadow.close(); gFloor.close();
+
+// ── GUI toggle ──────────────────────────────────────────────────────
+const guiEl     = gui.domElement;
+const toggleBtn = document.getElementById('gui-toggle');
+function setGuiVisible(v) {
+  guiEl.classList.toggle('hidden', !v);
+  toggleBtn.classList.toggle('is-off', !v);
+  toggleBtn.setAttribute('aria-pressed', String(v));
+}
+toggleBtn.addEventListener('click', () => setGuiVisible(guiEl.classList.contains('hidden')));
+addEventListener('keydown', e => { if (e.key === 'h' || e.key === 'H') setGuiVisible(guiEl.classList.contains('hidden')); });
+
+// ── 10. Animate ─────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+const tmpColor = new THREE.Color();
+
+function tick() {
+  const t = clock.getElapsedTime();
+
+  for (const { mesh, material, baseColor, index } of slabs) {
+    const phase = t * params.frequency * Math.PI * 2 - index * params.phaseStep;
+    const wave  = Math.sin(phase);
+    const rise  = (wave + 1) * 0.5;
+
+    mesh.scale.y   = params.baseHeight + rise * params.amplitude;
+    mesh.position.y = mesh.scale.y * 0.5 + wave * 0.06;
+
+    const mix = Math.pow(rise, 1.2);
+    tmpColor.copy(baseColor).lerp(COLOR_BLUE, mix * 0.55);
+    material.color.copy(tmpColor);
+    material.attenuationColor.copy(tmpColor);
+  }
+
+  group.rotation.y = Math.sin(t * 0.15) * params.rotateSway;
+  controls.update();
+
+  renderer.clear();
+  renderer.render(bgScene, new THREE.Camera());
+  renderer.clearDepth();
+  composer.render();
+
+  requestAnimationFrame(tick);
+}
+tick();
+</script>
+</body>
+</html>
