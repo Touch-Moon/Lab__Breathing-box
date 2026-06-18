@@ -4,6 +4,9 @@ A WebGL study of **frosted acrylic slabs** rising and falling in a travelling si
 
 Built with [Three.js](https://threejs.org/) `r160`, `lil-gui`, `RoundedBoxGeometry`, and a VSM-blurred shadow pass. Every parameter is live-tunable from the in-browser control panel.
 
+**▶ Live:** https://lab-wave-slabs.creative-moon.com
+**Write-up:** https://www.creative-moon.com/stories/wave-slabs
+
 ![Wave Slabs preview](./preview.png)
 
 ---
